@@ -13,6 +13,8 @@ using asio::ip::tcp;
 std::string gen_id();
 
 
+
+
 class TcpSession;
 typedef std::shared_ptr<TcpSession> tcp_session_ptr;
 
@@ -114,6 +116,16 @@ public:
 		sprintf(header, "%4d", static_cast<int>(body_length_));
 		memcpy(data_, header, header_length);
 	}
+
+	Message parse_from_str(const std::string&msg)
+	{
+		Message m;
+		m.body_length(msg.size());
+		m.encode_header();
+		strcpy_s(m.body(), m.max_body_length, msg.c_str());
+		return m;
+	}
+
 
 private:
 	char data_[header_length + max_body_length];
@@ -236,16 +248,31 @@ private:
 	SessionManager manager_;
 };
 
-
-class TcpClient
+class MessageHandle
 {
 public:
-	TcpClient(asio::io_context& io_context, std::string ip, int port):io_context_(io_context),socket_(io_context)
-	{
-		tcp::resolver resolver(io_context);
-		end_point_ = resolver.resolve(ip, std::to_string(port));
+	 MessageHandle(asio::io_context& io_context );
+	virtual ~MessageHandle();
+protected:
+	void write(const Message&message);
+	void handle_write(const asio::error_code&error);
+	void read_head(const asio::error_code&error);
+	void read_body(const asio::error_code&error);
+	void handle_read(const std::string& msg);
+	
+private:
+	asio::io_context& io_context_;
+	tcp::socket socket_;
+	//tcp::resolver::results_type end_point_;
+	Message read_msg_;
+	std::queue<Message> write_msg_queue_;
+};
 
-	}
+
+class TcpClient:public MessageHandle
+{
+public:
+	TcpClient(asio::io_context& io_context, std::string ip, int port);
 	void write(const std::string& message);
 	void close();
 	void connect();
@@ -260,13 +287,7 @@ private:
 	void handle_read_head(const asio::error_code &error);
 	void handle_read_body(const asio::error_code &error);
 	
-
-	asio::io_context& io_context_;
-	tcp::socket socket_;
 	tcp::resolver::results_type end_point_;
-	Message read_msg_;
-	std::queue<Message> write_msg_queue_;
-	
 };
 
 
