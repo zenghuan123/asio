@@ -132,6 +132,28 @@ private:
 	size_t body_length_;
 };
 
+class MessageHandle:public std::enable_shared_from_this<MessageHandle>
+{
+public:
+	 MessageHandle(asio::io_context& io_context );
+	virtual ~MessageHandle();
+	void write(const Message&message);
+protected:
+	
+	void handle_write(const asio::error_code&error);
+	void read_head(const asio::error_code&error);
+	void read_body(const asio::error_code&error);
+	virtual void handle_read(const std::string& msg);
+	
+	asio::io_context& io_context_;
+	tcp::socket socket_;
+	
+	Message read_msg_;
+	std::queue<Message> write_msg_queue_;
+};
+
+
+
 class TcpSession:public std::enable_shared_from_this<TcpSession>
 {
 public:
@@ -211,6 +233,17 @@ private:
 	SessionManager manager_;
 };
 
+class Service
+{
+
+}
+
+class ServiceManager<T>
+{
+public:
+Service create_service();
+
+}
 
 class TcpServer
 {
@@ -248,45 +281,19 @@ private:
 	SessionManager manager_;
 };
 
-class MessageHandle
-{
-public:
-	 MessageHandle(asio::io_context& io_context );
-	virtual ~MessageHandle();
-protected:
-	void write(const Message&message);
-	void handle_write(const asio::error_code&error);
-	void read_head(const asio::error_code&error);
-	void read_body(const asio::error_code&error);
-	void handle_read(const std::string& msg);
-	
-private:
-	asio::io_context& io_context_;
-	tcp::socket socket_;
-	//tcp::resolver::results_type end_point_;
-	Message read_msg_;
-	std::queue<Message> write_msg_queue_;
-};
 
 
 class TcpClient:public MessageHandle
 {
 public:
 	TcpClient(asio::io_context& io_context, std::string ip, int port);
-	void write(const std::string& message);
+	void write_async(const std::string& message);
 	void close();
 	void connect();
-	virtual void handle_message(const std::string& message);
 
 private:
 	void do_connect();
-	void handle_connect(const asio::error_code& error);
-	void do_write(const Message& message);
-	void handle_write(const asio::error_code&error);
-	void do_close();
-	void handle_read_head(const asio::error_code &error);
-	void handle_read_body(const asio::error_code &error);
-	
+	void handle_connect(const asio::error_code& error);	
 	tcp::resolver::results_type end_point_;
 };
 

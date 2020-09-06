@@ -6,10 +6,6 @@ std::string asio_server::gen_id()
 	return std::to_string(t);
 }
 
-
-
-
-
 asio_server::TcpClient::TcpClient(asio::io_context& io_context, std::string ip, int port):MessageHandle(io_context)
 {
 	tcp::resolver resolver(io_context);
@@ -17,48 +13,22 @@ asio_server::TcpClient::TcpClient(asio::io_context& io_context, std::string ip, 
 
 }
 
-void asio_server::TcpClient::write(const std::string & message)
+void asio_server::TcpClient::write_async(const std::string& message)
 {
-	Message m;
-	m.body_length(message.size());
-	m.encode_header();
-	strcpy_s(m.body(),m.max_body_length,message.c_str());
+	Message msg;
 	
-	asio::post(io_context_, std::bind(&asio_server::TcpClient::do_write,this, m));
-};
-void asio_server::TcpClient::do_write(const Message& message)
-{
-	bool need_process = write_msg_queue_.empty();
-	write_msg_queue_.push(message);
-	if(need_process)
-	{	
-		Message m = write_msg_queue_.front();
-		asio::async_write(socket_,asio::buffer(m.data(),m.length()),std::bind(&asio_server::TcpClient::handle_write,this,std::placeholders::_1));
-	}
+	msg.body_length(message.size());
+	memcpy(msg.body(), message.c_str(), msg.body_length());
+	msg.encode_header();
+	asio::post(std::bind(&asio_server::TcpClient::write, shared_from_this(), msg));
 }
-void asio_server::TcpClient::handle_write(const asio::error_code&error)
-{
-	if(!error)
-	{
-		write_msg_queue_.pop();
-		if(!write_msg_queue_.empty())
-		{	
-			Message m = write_msg_queue_.front();
-			asio::async_write(socket_,asio::buffer(m.data(),m.length()),std::bind(&asio_server::TcpClient::handle_write,this,std::placeholders::_1));
-		}
-	}else{
-		std::cout<<"write fail"<<std::endl;
-	}
-}
+
 
 void asio_server::TcpClient::close()
 {
 
 };
-void asio_server::TcpClient::do_close()
-{
 
-}
 
 void asio_server::TcpClient::connect()
 {
@@ -74,35 +44,11 @@ void asio_server::TcpClient::handle_connect(const asio::error_code& error)
 {
 	if(!error)
 	{
-		asio::async_read(socket_, asio::buffer(read_msg_.data(),Message::header_length),std::bind(&asio_server::TcpClient::handle_read_head,this,std::placeholders::_1));
+		asio::async_read(socket_, asio::buffer(read_msg_.data(),Message::header_length),std::bind(&asio_server::TcpClient::read_head,this,std::placeholders::_1));
 
 	}else{
 		std::cout<<"connect fail"<<std::endl;
 	}
-}
-void asio_server::TcpClient::handle_read_head(const asio::error_code&error)
-{
-	if(!error)
-	{
-		read_msg_.decode_header();
-		asio::async_read(socket_,asio::buffer(read_msg_.body(),read_msg_.body_length()),std::bind(&asio_server::TcpClient::handle_read_body,this,std::placeholders::_1));
-	}else{
-		std::cout<<"read head fail"<<std::endl;
-	}
-}
-void asio_server::TcpClient::handle_read_body(const asio::error_code& error)
-{
-	if(!error)
-	{
-			auto ptr = read_msg_.body();
-			std::string  message = std::string(ptr, ptr+read_msg_.body_length());
-			this->handle_message(message);
-	}
-}
-
-void asio_server::TcpClient::handle_message(const std::string&message)
-{
-	std::cout<<"client receive"<<message<<std::endl;
 }
 
 //---------------------------------------
