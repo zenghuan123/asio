@@ -1,0 +1,6 @@
+link_directories(${muduo_path}/lib)
+set(muduo_lib libmuduo_net.a libmuduo_inspect.a libmuduo_http.a libmuduo_base.a)
+add_executable(chat_server chat_server.cpp )
+target_link_libraries(chat_server ${muduo_lib})
+add_executable(chat_client chat_client.cpp )
+target_link_libraries(chat_client ${muduo_lib})
