@@ -7,51 +7,18 @@
 #include <queue>
 #include <asio.hpp>
 #include<iostream>
+#include<unordered_map>
 
 namespace asio_server{
 using asio::ip::tcp;
 std::string gen_id();
-
-
-
-
-class TcpSession;
-typedef std::shared_ptr<TcpSession> tcp_session_ptr;
-
-class SessionManager
-{
-public:
-	tcp_session_ptr get_session(std::string id)
-	{
-		auto it = session_map_.find(id);
-		if (it == session_map_.end())
-		{
-			return it->second;
-		}
-		else {
-			return NULL;
-		}
-	}
-	void add_session(std::string id, tcp_session_ptr ptr)
-	{
-		session_map_[id] = ptr;
-	}
-	void remove_session(std::string id)
-	{
-		session_map_.erase(id);
-	}
-	SessionManager() {};
-
-private:
-	
-	std::unordered_map<std::string, tcp_session_ptr> session_map_;
-};
 
 class Message
 {
 public:
 	enum { header_length = 4 };
 	enum { max_body_length = 512 };
+
 
 	Message()
 		: body_length_(0)
@@ -117,7 +84,7 @@ public:
 		memcpy(data_, header, header_length);
 	}
 
-	Message parse_from_str(const std::string&msg)
+	static Message parse_from_str(const std::string&msg)
 	{
 		Message m;
 		m.body_length(msg.size());
@@ -127,158 +94,117 @@ public:
 	}
 
 
+
 private:
 	char data_[header_length + max_body_length];
 	size_t body_length_;
 };
-
+class TcpServer;
 class MessageHandle:public std::enable_shared_from_this<MessageHandle>
 {
 public:
+	
 	 MessageHandle(asio::io_context& io_context );
 	virtual ~MessageHandle();
 	void write(const Message&message);
+	void close();
+	void set_read_callback(std::function<void(const std::string &msg)>);
+	void set_close_callback(std::function<void(void)> callback_);
 protected:
 	
 	void handle_write(const asio::error_code&error);
 	void read_head(const asio::error_code&error);
 	void read_body(const asio::error_code&error);
-	virtual void handle_read(const std::string& msg);
 	
 	asio::io_context& io_context_;
 	tcp::socket socket_;
 	
 	Message read_msg_;
 	std::queue<Message> write_msg_queue_;
+	std::function<void(const std::string &msg)> read_callback_;
+	std::function<void(void)> close_callback_;
 };
 
 
-
-class TcpSession:public std::enable_shared_from_this<TcpSession>
+class TcpConnection:public MessageHandle
 {
-public:
-	TcpSession(asio::io_context&io_context, SessionManager& manager):socket_(io_context),id_(gen_id()),manager_(manager)
-	{
-		
-	}
-
-	tcp::socket& socket()
-	{
-		return socket_;
 	
-	}
-	void start()
-	{
-		this->manager_.add_session(this->id(), shared_from_this());
-		this->start_read_head();
-	}
+public:
+	typedef std::shared_ptr<TcpConnection> ptr;
 
-	void disconnect()
+	TcpConnection(asio::io_context& io_context, std::string _id = gen_id());
+	inline tcp::socket& socket()
 	{
-		this->manager_.remove_session(this->id());
+		return this->socket_;
 	}
-
-	std::string id()
-	{
+	inline const std::string& id() {
 		return id_;
 	}
-	virtual void handle_message(const std::string& message)
-	{
-		std::cout<<"server receive"<<message<<std::endl;
-	}
-
-
 private:
-	void start_read_head()
-	{
-		asio::async_read(socket_,asio::buffer(message_.data(), Message::header_length), std::bind(&TcpSession::read_header, shared_from_this(),std::placeholders::_1));
-	}
-	void read_header(const asio::error_code& error)
-	{
-		std::cout << "read_header" << std::endl;
-		if (!error)
-		{
-			if (message_.decode_header())
-			{
-				asio::async_read(socket_,
-					asio::buffer(message_.body(), message_.body_length()), 
-					std::bind(&TcpSession::read_body,shared_from_this(),std::placeholders::_1)
-				);
-			}
-			else {
-				this->disconnect();
-			}
-		}
-		else {
-			this->disconnect();
-
-		}
-	}
-	void read_body(const asio::error_code&error)
-	{	
-		
-		std::cout << "read_body" << std::endl;
-		if (!error)
-		{	
-			this->start_read_head();
-			auto ptr = message_.body();
-			std::string  message = std::string(ptr, ptr+message_.body_length());
-			this->handle_message(message);
-		}
-	}
-
-	tcp::socket socket_;
-	Message message_;
 	std::string id_;
-	SessionManager manager_;
+
 };
-
-class Service
-{
-
-}
-
-class ServiceManager<T>
+class TcpConnectionManager
 {
 public:
-Service create_service();
+	friend class TcpServer;
+	inline void add_connection(TcpConnection::ptr ptr)
+	{
+		id_to_connection_[ptr->id()] = ptr;
+	}
+	inline void remove_connection(std::string id)
+	{
+		id_to_connection_.erase(id);
+	}
+	inline TcpConnection::ptr get_connection(std::string id)
+	{
+		auto it = id_to_connection_.find(id);
+		if (it != id_to_connection_.end())
+		{
+			return it->second.lock();
+		}
+		else {
+			return NULL;
+		}
+	}
+private:
+	std::unordered_map<std::string, std::weak_ptr<TcpConnection>> id_to_connection_;
 
-}
+};
 
 class TcpServer
 {
-	;
-public:
-	TcpServer(asio::io_context& io_context,std::string ip, int port) :io_context_(io_context), accpetor_(io_context, tcp::endpoint(asio::ip::make_address(ip), port))
-	{
 	
-	}
+public:
+	TcpServer(asio::io_context& io_context, std::string ip, int port);
 	void start_accpet()
 	{
-		tcp_session_ptr new_session = tcp_session_ptr(new TcpSession(io_context_, manager_));
-		accpetor_.async_accept(new_session->socket(),
-			std::bind(&TcpServer::handle_accept, this, new_session,
-				std::placeholders::_1));
+		auto p = new TcpConnection(io_context_);
+		
+		TcpConnection::ptr new_connection(p);
 
+		accpetor_.async_accept(new_connection->socket(),
+			std::bind(&TcpServer::handle_accept, this, new_connection,
+				std::placeholders::_1));
 	}
+	void set_new_connection(std::function<void(TcpConnection::ptr)> call_back);
+	inline const TcpConnectionManager& get_connection_manager()
+	{
+		return manager_;
+	}
+
+	void message_to_all(const std::string &msg);
+
 private:
 
-	void handle_accept(tcp_session_ptr session,
-		const asio::error_code& error)
-	{	
-		std::cout << "handle_accept" << std::endl;
-		start_accpet();
-		if (!error)
-		{
-			session->start();
-		}
-	}
+	void handle_accept(TcpConnection::ptr new_connection, const asio::error_code& error);
 
-
+	void on_connection_close(std::string id_);
 
 	asio::io_context& io_context_;
 	tcp::acceptor accpetor_;
-	SessionManager manager_;
+	TcpConnectionManager manager_;
+	std::function<void(TcpConnection::ptr)> new_connection_callback_;
 };
 
 
@@ -288,7 +214,7 @@ class TcpClient:public MessageHandle
 public:
 	TcpClient(asio::io_context& io_context, std::string ip, int port);
 	void write_async(const std::string& message);
-	void close();
+	
 	void connect();
 
 private:
