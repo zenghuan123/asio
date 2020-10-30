@@ -12,6 +12,7 @@
 #include<thread>
 #include<mutex>
 #include<queue>
+#include<sys/uio.h>
 
 #include<unordered_map>
 
@@ -22,20 +23,22 @@ std::string print(struct sockaddr_in * serveraddr)
 	uint16_t port = ntohs(serveraddr->sin_port);
 	//int end = strlen(buff);
 	//snprintf(buff + end, 128 - end, ":%u", port);
-	std::cout << buff <<":"<< port << std::endl;
+	std::cout << buff << ":" << port << std::endl;
 	return std::string(buff);
 }
 
 void server(char*argv[])
 {
-	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-	int listenfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	int epoll_fd = epoll_create1(EPOLL_CLOEXEC);//创建epoll文件描述符
+
+
+	int listenfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);//创建socket
 
 	struct sockaddr_in serveraddr;
 	bzero(&serveraddr, sizeof(serveraddr));
 	serveraddr.sin_family = AF_INET;
 
-	char * local_addr = argv[1];
+	char * local_addr = argv[1];//char local_addr[] = "127.0.0.1";
 	inet_pton(AF_INET, local_addr, &(serveraddr.sin_addr));//ip字符串转二进制
 
 	char buff[16];
@@ -47,14 +50,13 @@ void server(char*argv[])
 	int portnumber = atoi(argv[2]);
 	serveraddr.sin_port = htons(portnumber);//小端转大端
 
-	bind(listenfd, (sockaddr*)&serveraddr, sizeof(serveraddr));
-	listen(listenfd, 10);
+	bind(listenfd, (sockaddr*)&serveraddr, sizeof(serveraddr));//绑定
+	listen(listenfd, 10);//监听队列 ECONNREFUSED 
 
 	struct epoll_event events[20];
 
 	struct epoll_event ev;
 	ev.data.fd = listenfd;
-	
 	ev.events = EPOLLIN;
 	epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listenfd, &ev);
 
@@ -77,12 +79,12 @@ void server(char*argv[])
 			if (events[i].data.fd == listenfd)
 			{
 				struct sockaddr_in clientaddr;
-				socklen_t clilent;
+				socklen_t clilent = sizeof clientaddr;
 
 				int connfd = accept4(listenfd, (sockaddr*)&clientaddr, &clilent, SOCK_NONBLOCK | SOCK_CLOEXEC);
 				char *str = inet_ntoa(clientaddr.sin_addr);
 
-				std::cout << "accapt a connect" << str <<"fd is"<< connfd<< std::endl;
+				std::cout << "accapt a connect" << str << "fd is" << connfd << std::endl;
 				ev.data.fd = connfd;
 				ev.events = EPOLLIN;
 				struct sockaddr_in localaddr;
@@ -100,17 +102,21 @@ void server(char*argv[])
 				epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &ev);
 			}
 			else
-			{ 
-				
+			{
+
+				std::cout << "events " << (events[i].events&EPOLLIN) << " :" << (events[i].events& EPOLLPRI) << ":" << (events[i].events& EPOLLRDHUP)
+					<< ":" << (events[i].events& EPOLLHUP) << ":" << (events[i].events& EPOLLERR) << std::endl;
+
 				if (events[i].events&EPOLLHUP & !(events[i].events&EPOLLIN))
 				{
-					//没跑出来
+					//EPOLLHUP，对端关闭了连接
+
 					int socket_fd = events[i].data.fd;
-					std::cout << "EPOLLHUP close " << "fd" << socket_fd<< std::endl;
+					std::cout << "EPOLLHUP close " << "fd" << socket_fd << std::endl;
 					epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket_fd, &ev);//ev可以为NULl,但是在内核2.6.9以前会出错
 
 				}
-				if (events[i].events && (EPOLLERR))
+				if (events[i].events & (EPOLLERR))
 				{
 					int optval;
 					socklen_t optlen = static_cast<socklen_t>(sizeof optval);
@@ -123,6 +129,8 @@ void server(char*argv[])
 
 				if (events[i].events&(EPOLLIN | EPOLLPRI | EPOLLRDHUP))
 				{
+					//EPOLLRDHUP:Stream socket peer closed connection, or shut down writing half of connection
+
 					std::cout << "read data" << std::endl;
 					int socket_fd = events[i].data.fd;
 					struct iovec vec[2];
@@ -137,15 +145,29 @@ void server(char*argv[])
 					ssize_t n = readv(socket_fd, vec, 2);
 					if (n == 0)
 					{
+						//EPOLLRDHUP表示正常关闭，
 						//ctrl +c , kill，主动close(fd)
 						std::cout << "client close " << errno << std::endl;
 						epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket_fd, &ev);
 						continue;
-					}else
-					if (n < 0)
+					}
+					else
+						if (n < 0)
+						{
+							std::cout << "read error " << errno << std::endl;
+							//epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket_fd, &ev);
+							continue;
+						}
+					if (strcmp(buff1, "sshutdown") == 0)
 					{
-						std::cout << "read error " << errno << std::endl;
-						//epoll_ctl(epoll_fd, EPOLL_CTL_DEL, socket_fd, &ev);
+						shutdown(socket_fd, SHUT_WR);
+						std::cout << "server shutdown " << socket_fd << std::endl;
+						continue;
+					}
+					if (strcmp(buff1, "ssclose") == 0)
+					{
+						close(socket_fd);
+						std::cout << "server close " << socket_fd << std::endl;
 						continue;
 					}
 					std::cout << buff1 << std::endl;
@@ -166,7 +188,7 @@ void server(char*argv[])
 						if (length - n > 0)
 						{
 							ev.data.fd = socket_fd;
-							ev.events = EPOLLIN  | EPOLLOUT;
+							ev.events = EPOLLIN | EPOLLOUT;
 							//发送数据有剩余，需要监听 可写事件
 							//理论上应该先判断之前有没有监听可写事件，如果有就不需要再设置
 							epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &ev);
@@ -192,7 +214,7 @@ void server(char*argv[])
 					int socket_fd = events[i].data.fd;
 					ev.data.fd = socket_fd;
 					ev.events = EPOLLIN;
-					
+
 					epoll_ctl(epoll_fd, EPOLL_CTL_MOD, socket_fd, &ev);
 				}
 			}
@@ -202,9 +224,9 @@ void server(char*argv[])
 }
 void client(char*argv[])
 {
-	
+
 	int epoll_fd = epoll_create(256);
-	int client_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	int client_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
 	int evtfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 	struct sockaddr_in serveraddr;
 	bzero(&serveraddr, sizeof(serveraddr));
@@ -219,7 +241,7 @@ void client(char*argv[])
 
 	struct epoll_event ev;
 	ev.data.fd = client_fd;
-	ev.events = EPOLLOUT ;
+	ev.events = EPOLLOUT;
 	epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
 
 	ev.data.fd = evtfd;
@@ -232,7 +254,7 @@ void client(char*argv[])
 	serveraddr.sin_port = htons(portnumber);//小端转大端
 
 	int error = connect(client_fd, (struct sockaddr*)(&serveraddr), static_cast<socklen_t>(sizeof(serveraddr)));
-	if (error<0 && errno!= EINPROGRESS)
+	if (error < 0 && errno != EINPROGRESS)
 	{
 		std::cout << "connect error" << error << std::endl;
 		exit(1);
@@ -241,12 +263,12 @@ void client(char*argv[])
 	std::queue<std::string> send_msg;
 	std::mutex m;
 
-	std::thread t([evtfd,&send_msg,&m]() {
-		std::cout << "event fd"<< evtfd << std::endl;
+	std::thread t([evtfd, &send_msg, &m]() {
+		std::cout << "event fd" << evtfd << std::endl;
 		std::string line;
 		uint64_t i = 1;
 
-		while(std::getline(std::cin, line))
+		while (std::getline(std::cin, line))
 		{
 			m.lock();
 			send_msg.push(line);
@@ -258,136 +280,144 @@ void client(char*argv[])
 	struct epoll_event events[20];
 
 
-	
+
 	bool has_connect = false;
 	while (true)
 	{
 		std::cout << "epoll_wait start" << std::endl;
 		int nfds = epoll_wait(epoll_fd, events, 20, 10000);
 		std::cout << "epoll_wait end" << std::endl;
-		
+
 		for (int i = 0; i < nfds; ++i)
 		{
-			
-				if (events[i].events&EPOLLHUP & !(events[i].events&EPOLLIN))
-				{
-					int fd = events[i].data.fd;
-					std::cout << "EPOLLHUP  close " << "fd" << std::endl;
-					
-					exit(1);
-				}
+			std::cout << "events " << (events[i].events&EPOLLIN) << " :" << (events[i].events& EPOLLPRI) << ":" << (events[i].events& EPOLLRDHUP)
+				<< ":" << (events[i].events& EPOLLHUP) << ":" << (events[i].events& EPOLLERR) << std::endl;
 
-				if (events[i].events&(EPOLLIN | EPOLLPRI | EPOLLRDHUP))
-				{					
-					int socket_fd = events[i].data.fd;
-					if (socket_fd == evtfd)
+
+			if (events[i].events&EPOLLHUP & !(events[i].events&EPOLLIN))
+			{
+				int fd = events[i].data.fd;
+				std::cout << "EPOLLHUP  close " << "fd" << std::endl;
+
+				exit(1);
+			}
+
+			if (events[i].events&(EPOLLIN | EPOLLPRI | EPOLLRDHUP))
+			{
+				int socket_fd = events[i].data.fd;
+				if (socket_fd == evtfd)
+				{
+					std::cout << "wake up" << std::endl;
+					uint64_t i;
+					const ssize_t n = read(socket_fd, &i, sizeof i);
+					m.lock();
+					std::string line = send_msg.front();
+					if (line == "close")
 					{
-						std::cout << "wake up" << std::endl;
-						uint64_t i;
-						const ssize_t n = read(socket_fd, &i, sizeof i);
-						m.lock();
-						std::string line = send_msg.front();
-						if (line=="close")
-						{
-							std::cout << "try to close connect " << std::endl;
-							close(client_fd);
-							exit(1);
-							continue;
-						}else if(line=="shutdown")
-						{
-							std::cout << "try to shutdown connect " << std::endl;
-							shutdown(client_fd, SHUT_RDWR);
-							exit(1);
-						}
-						send_msg.pop();
-						m.unlock();
-						write(client_fd, line.c_str(), line.size());
+						std::cout << "try to close connect " << std::endl;
+						close(client_fd);
+						exit(1);
 						continue;
 					}
-					std::cout << "read data" << std::endl;
-					struct iovec vec[2];
-					char buff1[16];
-					bzero(buff1, sizeof buff1);
-					char buff2[1024];
-					bzero(buff2, sizeof buff2);
-					vec[0].iov_base = buff1;
-					vec[0].iov_len = sizeof buff1;
-					vec[1].iov_base = buff2;
-					vec[1].iov_len = sizeof buff2;
-					const ssize_t n = readv(socket_fd, vec, 2);
-					if (n == 0)
+					else if (line == "shutdown")
 					{
-						//
-						//对面关了触发读事件？？
-						std::cout <<" "<< (events[i].events&&EPOLLIN )<<" :"<< (events[i].events&& EPOLLPRI) <<":"<< (events[i].events&& EPOLLRDHUP) << std::endl;
-						std::cout << "close" << std::endl;
-						exit(1);
-					}else if (n < 0)
-					{
-						std::cout << "read error " << errno << std::endl;
-						//什么情况跑到这
+						std::cout << "try to shutdown connect " << std::endl;
+						shutdown(client_fd, SHUT_WR);
 						exit(1);
 					}
-					std::cout << buff1 << std::endl;
-					std::cout << buff2 << std::endl;
-
+					send_msg.pop();
+					m.unlock();
+					write(client_fd, line.c_str(), line.size());
+					//while (line == "sshutdown")
+					//{
+					//	std::cout << "sshutdown" << std::endl;
+					//}
+					continue;
 				}
-				if (events[i].events&EPOLLOUT)
+				std::cout << "read data" << std::endl;
+				struct iovec vec[2];
+				char buff1[16];
+				bzero(buff1, sizeof buff1);
+				char buff2[1024];
+				bzero(buff2, sizeof buff2);
+				vec[0].iov_base = buff1;
+				vec[0].iov_len = sizeof buff1;
+				vec[1].iov_base = buff2;
+				vec[1].iov_len = sizeof buff2;
+				const ssize_t n = readv(socket_fd, vec, 2);
+				if (n == 0)
 				{
-					
-					if (events[i].data.fd == client_fd)
+					//
+					//对面关了触发读事件？？
+					std::cout << "close" << std::endl;
+					exit(1);
+				}
+				else if (n < 0)
+				{
+					std::cout << "read error " << errno << std::endl;
+					//什么情况跑到这
+					exit(1);
+				}
+				std::cout << buff1 << std::endl;
+				std::cout << buff2 << std::endl;
+
+			}
+			if (events[i].events&EPOLLOUT)
+			{
+
+				if (events[i].data.fd == client_fd)
+				{
+					if (has_connect)
 					{
-						if (has_connect)
-						{
 
-						}
-						else {
-							has_connect = true;
-							
-							std::cout << "connect success can send data" << std::endl;
-							struct sockaddr_in localaddr;
-							memset(&localaddr, 0, sizeof localaddr);
-							socklen_t addrlen = static_cast<socklen_t>(sizeof localaddr);
-							getsockname(client_fd, (struct sockaddr*)(&localaddr), &addrlen);
-
-							struct sockaddr_in peeraddr;
-							memset(&peeraddr, 0, sizeof peeraddr);
-							socklen_t peeraddrlen = static_cast<socklen_t>(sizeof peeraddr);
-							getpeername(client_fd, (struct sockaddr*)(&peeraddr), &peeraddrlen);
-
-							print(&localaddr);
-							print(&peeraddr);
-							
-
-							ev.data.fd = client_fd;
-							ev.events = EPOLLIN;
-							epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client_fd, &ev);
-						}
 					}
 					else {
-						std::cout << "can send data" << std::endl;
+						has_connect = true;
+
+						std::cout << "connect success can send data" << std::endl;
+						struct sockaddr_in localaddr;
+						memset(&localaddr, 0, sizeof localaddr);
+						socklen_t addrlen = static_cast<socklen_t>(sizeof localaddr);
+						getsockname(client_fd, (struct sockaddr*)(&localaddr), &addrlen);
+
+						struct sockaddr_in peeraddr;
+						memset(&peeraddr, 0, sizeof peeraddr);
+						socklen_t peeraddrlen = static_cast<socklen_t>(sizeof peeraddr);
+						getpeername(client_fd, (struct sockaddr*)(&peeraddr), &peeraddrlen);
+
+						print(&localaddr);
+						print(&peeraddr);
+
+
+						ev.data.fd = client_fd;
+						ev.events = EPOLLIN;
+						epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client_fd, &ev);
 					}
 				}
-				if (events[i].events && (EPOLLERR))
-				{
-					int optval;
-					socklen_t optlen = static_cast<socklen_t>(sizeof optval);
-					//获取一个套接字的各种数据
-					int error = getsockopt(events[i].data.fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
-
-					//EINPROGRESS  Operation now in progress
-					std::cout << " errno:" << errno << "  socket is error? " << (error < 0 ? "true" : "false") << std::endl;
+				else {
+					std::cout << "can send data" << std::endl;
 				}
+			}
+			if (events[i].events & (EPOLLERR))
+			{
+				int optval;
+				socklen_t optlen = static_cast<socklen_t>(sizeof optval);
+				//获取一个套接字的各种数据
+				int error = getsockopt(events[i].data.fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
+
+				//EINPROGRESS  Operation now in progress
+				std::cout << " errno:" << errno << "  socket is error? " << (error < 0 ? "true" : "false") << std::endl;
+			}
 
 
-			
+
 
 		}
 	}
 }
 int main(int argc, char*argv[])
 {
-	if (argc < 3)
+	if (argc < 4)
 	{
 		std::cout << "ip port <0|1>" << std::endl;
 		return 0;
@@ -400,8 +430,10 @@ int main(int argc, char*argv[])
 	else {
 		client(argv);
 	}
-	
-	
+
+
+
+
 
 
 }
