@@ -4,7 +4,7 @@
 #include "best_forward.h"
 int main(int argc, char* argv[])
 {
-	smart_ptr::test();
+	pool::test();
 	//best_forward::test();
 	return 0;
 }
