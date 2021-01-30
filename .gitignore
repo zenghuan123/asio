@@ -3,4 +3,4 @@
 asio/
 build/
 build_linux
-*build
+*build*
