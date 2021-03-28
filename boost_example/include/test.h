@@ -9,6 +9,7 @@
 #include <set>
 #include<string>
 #include "boost/operators.hpp"
+#include "boost/exception/all.hpp"
 namespace test
 {	
 	using namespace std;
@@ -91,5 +92,58 @@ namespace test2 {
 		std::cout << (l == r) << std::endl;
 		point re = l + r;
 		
+	}
+}
+
+namespace exception_demo {
+	typedef boost::error_info<struct tag_err_no, int> err_no;
+	typedef boost::error_info<struct tag_err_str, std::string> err_str;
+	struct my_exception:virtual std::exception,virtual boost::exception{};
+	void test1()
+	{
+		try {
+			try {
+				throw my_exception() << err_no(10);
+			}
+			catch (my_exception e)
+			{
+				std::cout << *boost::get_error_info<err_no>(e) << std::endl;
+				std::cout << e.what() << std::endl;
+				e << err_str("other info");
+				throw;
+			}
+		}
+		catch (my_exception e)
+		{
+			std::cout << *boost::get_error_info<err_str>(e) << std::endl;
+		}
+	}
+}
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
+namespace uuid_demo {
+	using namespace boost::uuids;
+	void test1()
+	{
+		auto gen = nil_generator();
+		uuid u = gen();
+		assert(u.is_nil());
+		string_generator sgen;
+		uuid u1 = sgen("0123456789abcdef0123456789abcdef");
+		std::cout << u1 << std::endl;
+		std::cout << to_string(u1) << std::endl;
+
+		uuid base = sgen("0123456789abcdef0123456789abcdef");
+		name_generator ngen(base);
+
+		uuid u2 = ngen("mario");
+		std::cout << u2 << std::endl;
+		random_generator rgen;
+		uuid u3 = rgen();
+		std::cout << u3 << std::endl;
+
+
 	}
 }

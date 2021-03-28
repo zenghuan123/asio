@@ -15,6 +15,8 @@ int main(int argc, char* argv[])
 	//best_forward::test();
 	test::assign_demo();
 	test2::operator_demo();
+	exception_demo::test1();
+	uuid_demo::test1();
 	return 0;
 }                                             
 

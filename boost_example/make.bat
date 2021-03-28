@@ -1,5 +1,4 @@
-cd build64
-cmake -DCMAKE_PREFIX_PATH="E:\usr" -A x64  ..
+cd build
+cmake -DCMAKE_PREFIX_PATH="E:\usr" ..
 pause
 
-protoc --cpp_out=./include *.proto
